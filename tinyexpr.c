@@ -55,8 +55,24 @@ For log = natural log uncomment the next line. */
 typedef double (*te_fun2)(double, double);
 
 enum {
-    TOK_NULL = TE_CLOSURE7+1, TOK_ERROR, TOK_END, TOK_SEP,
-    TOK_OPEN, TOK_CLOSE, TOK_NUMBER, TOK_VARIABLE, TOK_INFIX
+    /// Нет токена
+    TOK_NULL = TE_CLOSURE7+1,
+    /// Ошибка
+    TOK_ERROR,
+    /// Конец
+    TOK_END,
+    /// Разделитель
+    TOK_SEP,
+    /// Открытая скобка
+    TOK_OPEN,
+    /// Закрытая скобка
+    TOK_CLOSE,
+    /// Число
+    TOK_NUMBER,
+    /// Переменная
+    TOK_VARIABLE,
+    /// Оператор
+    TOK_INFIX
 };
 
 
@@ -64,34 +80,63 @@ enum {TE_CONSTANT = 1};
 
 
 typedef struct state {
+    /// Указатель на начало строки
     const char *start;
+    /// Текущее положение в строке
     const char *next;
+    /// Тип токена
     int type;
-    union {double value; const double *bound; const void *function;};
+    union {
+        /// Значение
+        double value;
+        /// Указатель на переменную
+        const double *bound;
+        /// Действие над операндами
+        const void *function;
+    };
     void *context;
 
+    /// Переменные которые будут участвовать в обработке
     const te_variable *lookup;
+    /// Количество переменных
     int lookup_len;
 } state;
 
-
+/// Определение типа
 #define TYPE_MASK(TYPE) ((TYPE)&0x0000001F)
 
+/// Проверка на чистую функцию
 #define IS_PURE(TYPE) (((TYPE) & TE_FLAG_PURE) != 0)
+/// Проверка на функцию
 #define IS_FUNCTION(TYPE) (((TYPE) & TE_FUNCTION0) != 0)
 #define IS_CLOSURE(TYPE) (((TYPE) & TE_CLOSURE0) != 0)
+/// Получение количества параметров
 #define ARITY(TYPE) ( ((TYPE) & (TE_FUNCTION0 | TE_CLOSURE0)) ? ((TYPE) & 0x00000007) : 0 )
+/// Создание выражения
 #define NEW_EXPR(type, ...) new_expr((type), (const te_expr*[]){__VA_ARGS__})
+/// Проверка на nullptr
 #define CHECK_NULL(ptr, ...) if ((ptr) == NULL) { __VA_ARGS__; return NULL; }
 
+/**
+ * Создание нового выражения
+ * @param type      [in] Тип выражения
+ * @param parameters[in] Параметры выражение
+ * @return Созданное выражение
+ */
 static te_expr *new_expr(const int type, const te_expr *parameters[]) {
+    /// Количество параметров у функции/оператора
     const int arity = ARITY(type);
+    /// Размер параметров
     const int psize = sizeof(void*) * arity;
+    /// Размер выражения
     const int size = (sizeof(te_expr) - sizeof(void*)) + psize + (IS_CLOSURE(type) ? sizeof(void*) : 0);
+    /// Выделяем память для выражения
     te_expr *ret = malloc(size);
     CHECK_NULL(ret);
 
+    /// Зануляем все
     memset(ret, 0, size);
+    /// Копируем все параметры если они есть
     if (arity && parameters) {
         memcpy(ret->parameters, parameters, psize);
     }
@@ -100,7 +145,10 @@ static te_expr *new_expr(const int type, const te_expr *parameters[]) {
     return ret;
 }
 
-
+/**
+ * Очистка всех параметров выражения
+ * @param n[in] Выражение
+ */
 void te_free_parameters(te_expr *n) {
     if (!n) return;
     switch (TYPE_MASK(n->type)) {
@@ -114,7 +162,10 @@ void te_free_parameters(te_expr *n) {
     }
 }
 
-
+/**
+ * Удаляем выражение
+ * @param n[in] Выражение
+ */
 void te_free(te_expr *n) {
     if (!n) return;
     te_free_parameters(n);
@@ -192,11 +243,18 @@ static const te_variable functions[] = {
     {0, 0, 0, 0}
 };
 
+/**
+ * Поиск встроенной функции
+ * @param name[in] Имя функции
+ * @param len [in] Длина имени
+ * @return функция или, если не нашли, то nullptr
+ */
 static const te_variable *find_builtin(const char *name, int len) {
     int imin = 0;
+    /// Индекс последней функции в списке (-2 потому что последняя пустая)
     int imax = sizeof(functions) / sizeof(te_variable) - 2;
 
-    /*Binary search.*/
+    /// Бинарный поиск можем применить поскольку функции отсортированы по имени
     while (imax >= imin) {
         const int i = (imin + ((imax-imin)/2));
         int c = strncmp(name, functions[i].name, len);
@@ -213,11 +271,22 @@ static const te_variable *find_builtin(const char *name, int len) {
     return 0;
 }
 
+/**
+ * Поиск переменной в строке
+ * @param s[in]     Текущее состояние
+ * @param name[in]  Указатель на начало имени предполагаемой переменной
+ * @param len[in]   Длина имени
+ * @return указатель на переменную или, если не нашли, то nullptr
+ */
 static const te_variable *find_lookup(const state *s, const char *name, int len) {
+    /// Итератор по переменным
     int iters;
+    /// Найденная переменная
     const te_variable *var;
+    /// Проверка на существование переменных
     if (!s->lookup) return 0;
 
+    /// Обход всех переменных (поиск по имени)
     for (var = s->lookup, iters = s->lookup_len; iters; ++var, --iters) {
         if (strncmp(name, var->name, len) == 0 && var->name[len] == '\0') {
             return var;
@@ -235,45 +304,59 @@ static double divide(double a, double b) {return a / b;}
 static double negate(double a) {return -a;}
 static double comma(double a, double b) {(void)a; return b;}
 
-
+/**
+ * Поиск токена
+ * @param s[in,out] Текущее состояние
+ */
 void next_token(state *s) {
     s->type = TOK_NULL;
 
     do {
-
+        /// Если мы дошли до конца строки
         if (!*s->next){
             s->type = TOK_END;
             return;
         }
 
-        /* Try reading a number. */
+        /// Пытаемся прочитать число
         if ((s->next[0] >= '0' && s->next[0] <= '9') || s->next[0] == '.') {
+            /// Запись полученного значения
             s->value = strtod(s->next, (char**)&s->next);
             s->type = TOK_NUMBER;
         } else {
-            /* Look for a variable or builtin function call. */
+            /// Пытаемся найти переменную или вызов встроенной функции
             if (isalpha(s->next[0])) {
                 const char *start;
                 start = s->next;
-                while (isalpha(s->next[0]) || isdigit(s->next[0]) || (s->next[0] == '_')) s->next++;
-                
-                const te_variable *var = find_lookup(s, start, s->next - start);
-                if (!var) var = find_builtin(start, s->next - start);
 
+                /// Идем до конца переменной/функции
+                while (isalpha(s->next[0]) || isdigit(s->next[0]) || (s->next[0] == '_')) s->next++;
+
+                /// Ищем переменную
+                const te_variable *var = find_lookup(s, start, s->next - start);
+                /// Если переменную не нашли, то ищем встроенную функцию
+                if (!var) {
+                    var = find_builtin(start, s->next - start);
+                }
+
+                /// Если не нашли то ошибка
                 if (!var) {
                     s->type = TOK_ERROR;
                 } else {
+                    /// Определяем, что мы нашли
                     switch(TYPE_MASK(var->type))
                     {
+                        /// Нашли переменную
                         case TE_VARIABLE:
                             s->type = TOK_VARIABLE;
                             s->bound = var->address;
                             break;
-
+                        /// Нашли я пока хз что ?
                         case TE_CLOSURE0: case TE_CLOSURE1: case TE_CLOSURE2: case TE_CLOSURE3:         /* Falls through. */
                         case TE_CLOSURE4: case TE_CLOSURE5: case TE_CLOSURE6: case TE_CLOSURE7:         /* Falls through. */
                             s->context = var->context;                                                  /* Falls through. */
 
+                        /// Нашли функцию
                         case TE_FUNCTION0: case TE_FUNCTION1: case TE_FUNCTION2: case TE_FUNCTION3:     /* Falls through. */
                         case TE_FUNCTION4: case TE_FUNCTION5: case TE_FUNCTION6: case TE_FUNCTION7:     /* Falls through. */
                             s->type = var->type;
@@ -283,7 +366,7 @@ void next_token(state *s) {
                 }
 
             } else {
-                /* Look for an operator or special character. */
+                /// Ищем оператор или специальный символ
                 switch (s->next++[0]) {
                     case '+': s->type = TOK_INFIX; s->function = add; break;
                     case '-': s->type = TOK_INFIX; s->function = sub; break;
@@ -299,7 +382,7 @@ void next_token(state *s) {
                 }
             }
         }
-    } while (s->type == TOK_NULL);
+    } while (s->type == TOK_NULL); /// Все продолжается пока не найдем токен
 }
 
 
@@ -307,16 +390,23 @@ static te_expr *list(state *s);
 static te_expr *expr(state *s);
 static te_expr *power(state *s);
 
+/**
+ * Создание базового выражения
+ * @param s[in] Текущее состояние
+ * @return Выражение
+ */
 static te_expr *base(state *s) {
     /* <base>      =    <constant> | <variable> | <function-0> {"(" ")"} | <function-1> <power> | <function-X> "(" <expr> {"," <expr>} ")" | "(" <list> ")" */
     te_expr *ret;
     int arity;
 
+    /// Определяем какой был последний обработанный токен
     switch (TYPE_MASK(s->type)) {
         case TOK_NUMBER:
             ret = new_expr(TE_CONSTANT, 0);
             CHECK_NULL(ret);
 
+            /// Записываем значение
             ret->value = s->value;
             next_token(s);
             break;
@@ -325,6 +415,7 @@ static te_expr *base(state *s) {
             ret = new_expr(TE_VARIABLE, 0);
             CHECK_NULL(ret);
 
+            /// Настраиваем связь
             ret->bound = s->bound;
             next_token(s);
             break;
@@ -334,11 +425,16 @@ static te_expr *base(state *s) {
             ret = new_expr(s->type, 0);
             CHECK_NULL(ret);
 
+            /// Задаем функциональную часть
             ret->function = s->function;
+            /// ?
             if (IS_CLOSURE(s->type)) ret->parameters[0] = s->context;
+            /// Идем дальше
             next_token(s);
+            /// Если нашли открывающую скобку
             if (s->type == TOK_OPEN) {
                 next_token(s);
+                /// Поскольку функция с 0 параметров следом должна стоять закрывающая скобка "foo()"
                 if (s->type != TOK_CLOSE) {
                     s->type = TOK_ERROR;
                 } else {
@@ -356,6 +452,7 @@ static te_expr *base(state *s) {
             if (IS_CLOSURE(s->type)) ret->parameters[1] = s->context;
             next_token(s);
             ret->parameters[0] = power(s);
+            /// Если параметры nullptr, то чистим
             CHECK_NULL(ret->parameters[0], te_free(ret));
             break;
 
@@ -363,6 +460,7 @@ static te_expr *base(state *s) {
         case TE_FUNCTION5: case TE_FUNCTION6: case TE_FUNCTION7:
         case TE_CLOSURE2: case TE_CLOSURE3: case TE_CLOSURE4:
         case TE_CLOSURE5: case TE_CLOSURE6: case TE_CLOSURE7:
+            /// Узнаем количество параметров
             arity = ARITY(s->type);
 
             ret = new_expr(s->type, 0);
@@ -372,19 +470,23 @@ static te_expr *base(state *s) {
             if (IS_CLOSURE(s->type)) ret->parameters[arity] = s->context;
             next_token(s);
 
+            /// Функция всегда начинается со скобки
             if (s->type != TOK_OPEN) {
                 s->type = TOK_ERROR;
             } else {
                 int i;
                 for(i = 0; i < arity; i++) {
                     next_token(s);
+                    /// Задаем параметры
                     ret->parameters[i] = expr(s);
                     CHECK_NULL(ret->parameters[i], te_free(ret));
 
+                    /// Дошли до конца, все параметры заданы
                     if(s->type != TOK_SEP) {
                         break;
                     }
                 }
+                /// Указано неправильное количество параметров или не стоит закрывающая скобка
                 if(s->type != TOK_CLOSE || i != arity - 1) {
                     s->type = TOK_ERROR;
                 } else {
@@ -396,9 +498,11 @@ static te_expr *base(state *s) {
 
         case TOK_OPEN:
             next_token(s);
+            /// Формируем список
             ret = list(s);
             CHECK_NULL(ret);
 
+            /// Список должен закрываться скобкой
             if (s->type != TOK_CLOSE) {
                 s->type = TOK_ERROR;
             } else {
@@ -407,6 +511,7 @@ static te_expr *base(state *s) {
             break;
 
         default:
+            /// Допущена ошибка
             ret = new_expr(0, 0);
             CHECK_NULL(ret);
 
@@ -418,10 +523,16 @@ static te_expr *base(state *s) {
     return ret;
 }
 
-
+/**
+ * Раскручивание базовой операции (функция, значение и тп)
+ * @param s[in] Текущее состояние
+ * @return
+ */
 static te_expr *power(state *s) {
     /* <power>     =    {("-" | "+")} <base> */
+    /// ?
     int sign = 1;
+    /// Пока символы "-" | "+" идем до следующего токена
     while (s->type == TOK_INFIX && (s->function == add || s->function == sub)) {
         if (s->function == sub) sign = -sign;
         next_token(s);
@@ -429,12 +540,14 @@ static te_expr *power(state *s) {
 
     te_expr *ret;
 
+    /// Если перед выражением не стояло минуса или они компенсировали друг друга
     if (sign == 1) {
         ret = base(s);
     } else {
         te_expr *b = base(s);
         CHECK_NULL(b);
 
+        /// Оборачиваем в функцию отрицания
         ret = NEW_EXPR(TE_FUNCTION1 | TE_FLAG_PURE, b);
         CHECK_NULL(ret, te_free(b));
 
@@ -500,18 +613,27 @@ static te_expr *factor(state *s) {
     return ret;
 }
 #else
+/**
+ * Раскручивание операции возведения в степень
+ * @param s[in] Текущее состояние
+ * @return
+ */
 static te_expr *factor(state *s) {
     /* <factor>    =    <power> {"^" <power>} */
     te_expr *ret = power(s);
     CHECK_NULL(ret);
 
+    /// Идем пока идут знаки возведения в степень
     while (s->type == TOK_INFIX && (s->function == pow)) {
+        /// Сохраняем функцию
         te_fun2 t = s->function;
         next_token(s);
+        /// Находим в какую степень мы будем возводить
         te_expr *p = power(s);
         CHECK_NULL(p, te_free(ret));
 
         te_expr *prev = ret;
+        /// Назначаем, что это функция двух параметров "pow(ret, p)"
         ret = NEW_EXPR(TE_FUNCTION2 | TE_FLAG_PURE, ret, p);
         CHECK_NULL(ret, te_free(p), te_free(prev));
 
@@ -523,19 +645,29 @@ static te_expr *factor(state *s) {
 #endif
 
 
-
+/**
+ * Раскручивание операций с умножением/делением/нахождением остатка
+ * @param s[in] Текущее состояние
+ * @return
+ */
 static te_expr *term(state *s) {
     /* <term>      =    <factor> {("*" | "/" | "%") <factor>} */
+    /// Находим то, что будем умножать/делить/находить остаток
     te_expr *ret = factor(s);
     CHECK_NULL(ret);
 
+    /// Пока идут последовательно эти функции
     while (s->type == TOK_INFIX && (s->function == mul || s->function == divide || s->function == fmod)) {
+        /// Сохраняем функцию
         te_fun2 t = s->function;
         next_token(s);
+
+        /// Находим второй операнд
         te_expr *f = factor(s);
         CHECK_NULL(f, te_free(ret));
 
         te_expr *prev = ret;
+        /// Назначаем нужную функцию "ret "*" | "/" | "%" f"
         ret = NEW_EXPR(TE_FUNCTION2 | TE_FLAG_PURE, ret, f);
         CHECK_NULL(ret, te_free(f), te_free(prev));
 
@@ -545,19 +677,27 @@ static te_expr *term(state *s) {
     return ret;
 }
 
-
+/**
+ * Раскручивание операций сложения/вычитания
+ * @param s[in] Текущее состояние
+ * @return
+ */
 static te_expr *expr(state *s) {
     /* <expr>      =    <term> {("+" | "-") <term>} */
+    /// Находим первый операнд для сложения/вычитания
     te_expr *ret = term(s);
     CHECK_NULL(ret);
 
     while (s->type == TOK_INFIX && (s->function == add || s->function == sub)) {
+        /// Сохраняем функцию
         te_fun2 t = s->function;
         next_token(s);
+        /// Находим второй операнд для сложения/вычитания
         te_expr *te = term(s);
         CHECK_NULL(te, te_free(ret));
 
         te_expr *prev = ret;
+        /// Назначаем нужную функцию "ret "+" | "-" te"
         ret = NEW_EXPR(TE_FUNCTION2 | TE_FLAG_PURE, ret, te);
         CHECK_NULL(ret, te_free(te), te_free(prev));
 
@@ -567,18 +707,25 @@ static te_expr *expr(state *s) {
     return ret;
 }
 
-
+/**
+ * Раскручивание списка
+ * @param s[in] Текущее состояние
+ * @return
+ */
 static te_expr *list(state *s) {
     /* <list>      =    <expr> {"," <expr>} */
+    /// Находим первый операнд для списка
     te_expr *ret = expr(s);
     CHECK_NULL(ret);
 
     while (s->type == TOK_SEP) {
         next_token(s);
+        /// Находим второй операнд для списка
         te_expr *e = expr(s);
         CHECK_NULL(e, te_free(ret));
 
         te_expr *prev = ret;
+        /// Назначаем нужную функцию "ret, e"
         ret = NEW_EXPR(TE_FUNCTION2 | TE_FLAG_PURE, ret, e);
         CHECK_NULL(ret, te_free(e), te_free(prev));
 
@@ -592,7 +739,11 @@ static te_expr *list(state *s) {
 #define TE_FUN(...) ((double(*)(__VA_ARGS__))n->function)
 #define M(e) te_eval(n->parameters[e])
 
-
+/**
+ * Вычисление значения выражения, но только если все ее параметры простые
+ * @param n[in] Выражение которое необходимо вычислить
+ * @return Значение выражения
+ */
 double te_eval(const te_expr *n) {
     if (!n) return NAN;
 
@@ -636,16 +787,32 @@ double te_eval(const te_expr *n) {
 #undef TE_FUN
 #undef M
 
+/**
+ *
+ * @param n
+ */
 static void optimize(te_expr *n) {
-    /* Evaluates as much as possible. */
+    /// Если у нас выражение состоит только из значения то можно не упрощать
     if (n->type == TE_CONSTANT) return;
     if (n->type == TE_VARIABLE) return;
 
-    /* Only optimize out functions flagged as pure. */
+    /// Оптимизируем только функции, отмеченные как "чистые"
     if (IS_PURE(n->type)) {
+        /// Находим количество параметров функции
         const int arity = ARITY(n->type);
+
+        /**
+         * Если все параметры известны (то есть их значения - константы),
+         * то переменная known устанавливается в значение 1,
+         * а если хотя бы один из параметров не является константой,
+         * то known устанавливается в значение 0.
+         *
+         * Таким образом, переменная known используется для определения того,
+         * можно ли оптимизировать функцию n, используя известные значения ее параметров.
+         */
         int known = 1;
         int i;
+        /// Проходим по всем параметрам и оптимизируем их
         for (i = 0; i < arity; ++i) {
             optimize(n->parameters[i]);
             if (((te_expr*)(n->parameters[i]))->type != TE_CONSTANT) {
@@ -653,7 +820,9 @@ static void optimize(te_expr *n) {
             }
         }
         if (known) {
+            /// Вычисляем значение простого выражения
             const double value = te_eval(n);
+            /// Параметры больше не нужны, чистим их
             te_free_parameters(n);
             n->type = TE_CONSTANT;
             n->value = value;
@@ -661,20 +830,32 @@ static void optimize(te_expr *n) {
     }
 }
 
-
+/**
+ *  Компиляция выражения
+ * @param expression[in] Выражение в виде строки
+ * @param variables[in]  Переменные
+ * @param var_count[in]  Количество переменных
+ * @param error[out]     Ошибка
+ * @return
+ */
 te_expr *te_compile(const char *expression, const te_variable *variables, int var_count, int *error) {
+    /// Текущее состояние
     state s;
     s.start = s.next = expression;
     s.lookup = variables;
     s.lookup_len = var_count;
 
+    /// Поиск токена
     next_token(&s);
+    /// Находим корень дерева выражений
     te_expr *root = list(&s);
+    /// Если что-то не получилось создать, то ошибка
     if (root == NULL) {
         if (error) *error = -1;
         return NULL;
     }
 
+    /// Если не дошли до конца, то ошибка
     if (s.type != TOK_END) {
         te_free(root);
         if (error) {
@@ -683,14 +864,21 @@ te_expr *te_compile(const char *expression, const te_variable *variables, int va
         }
         return 0;
     } else {
+        /// Оптимизируем выражение если это можно сделать
         optimize(root);
         if (error) *error = 0;
         return root;
     }
 }
 
-
+/**
+ * Вычисление простого выражения без пользовательских переменных
+ * @param expression[in] Выражение в виде строки
+ * @param error[out]     Ошибка
+ * @return
+ */
 double te_interp(const char *expression, int *error) {
+    /// Компилируем простое выражение не имеющее переменных
     te_expr *n = te_compile(expression, 0, 0, error);
     if (n == NULL) {
         return NAN;
@@ -698,7 +886,9 @@ double te_interp(const char *expression, int *error) {
 
     double ret;
     if (n) {
+        /// Вычисляем значение всего выражения
         ret = te_eval(n);
+        /// Чистим за собой всю память
         te_free(n);
     } else {
         ret = NAN;
@@ -706,8 +896,14 @@ double te_interp(const char *expression, int *error) {
     return ret;
 }
 
+/**
+ * Вывод поддерева выражения
+ * @param n[in]     Выражение
+ * @param depth[in] Глубина поддерева
+ */
 static void pn (const te_expr *n, int depth) {
     int i, arity;
+    /// Смещаемся
     printf("%*s", depth, "");
 
     switch(TYPE_MASK(n->type)) {
@@ -731,7 +927,10 @@ static void pn (const te_expr *n, int depth) {
     }
 }
 
-
+/**
+ * Вывод всего дерева
+ * @param n[in] Выражение
+ */
 void te_print(const te_expr *n) {
     pn(n, 0);
 }

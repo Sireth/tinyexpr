@@ -34,28 +34,45 @@ extern "C" {
 
 
 typedef struct te_expr {
+    /// Тип выражения
     int type;
-    union {double value; const double *bound; const void *function;};
+    union {
+        /// Значение
+        double value;
+        /// Связь с переменной
+        const double *bound;
+        /// Действие
+        const void *function;
+    };
+    /// Параметры выражения
     void *parameters[1];
 } te_expr;
 
 
 enum {
+    /// Переменная
     TE_VARIABLE = 0,
 
+    /// Встроенные функции
     TE_FUNCTION0 = 8, TE_FUNCTION1, TE_FUNCTION2, TE_FUNCTION3,
     TE_FUNCTION4, TE_FUNCTION5, TE_FUNCTION6, TE_FUNCTION7,
 
+    /// ?
     TE_CLOSURE0 = 16, TE_CLOSURE1, TE_CLOSURE2, TE_CLOSURE3,
     TE_CLOSURE4, TE_CLOSURE5, TE_CLOSURE6, TE_CLOSURE7,
 
+    /// Функция имеет простые выражения (не составные)
     TE_FLAG_PURE = 32
 };
 
 typedef struct te_variable {
+    /// Имя переменной
     const char *name;
+    /// Адрес переменной
     const void *address;
+    /// Тип переменной
     int type;
+    /// Контекст ?
     void *context;
 } te_variable;
 
